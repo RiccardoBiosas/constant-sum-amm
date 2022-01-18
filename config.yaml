@@ -1,0 +1,15 @@
+prefix: "echidna_"
+#propMaxGas defines gas cost at which a property fails
+propMaxGas: 8000000030
+#testMaxGas is a gas limit; does not cause failure, but terminates sequence
+testMaxGas: 8000000030
+#maxGasprice is the maximum gas price
+maxGasprice: 0
+#testLimit is the number of test sequences to run
+testLimit: 2000
+#stopOnFail makes echidna terminate as soon as any property fails and has been shrunk
+stopOnFail: true
+coverage: true
+# #format can be "text" or "json" for different output (human or machine readable)
+format: "json"
+corpusDir: "corpus"

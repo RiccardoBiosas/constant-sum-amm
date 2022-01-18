@@ -165,7 +165,7 @@ contract CSAmm is ICSAmm, ERC20 {
         uint256 _reserveY
     )
         private
-        view
+        pure
         returns (
             uint256,
             uint256,
