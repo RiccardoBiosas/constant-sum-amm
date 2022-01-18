@@ -70,3 +70,14 @@ export const approvePairToAmm = async (
 };
 
 export const consoleBN = (str: string, bn: BigNumber) => console.log(`${str}: ${bn.toString()}`);
+
+// return _amount * (10**(18 - _tokenDecimals));
+export const normalizeAmount = (amount: BigNumber, tokenDecimals: number): BigNumber => {
+  console.log("tokenDecimals::::::::::::: ", tokenDecimals);
+  if (tokenDecimals < 18) {
+    return amount.mul(
+      ethers.BigNumber.from(1).pow(ethers.BigNumber.from(18).sub(ethers.BigNumber.from(tokenDecimals))),
+    );
+  }
+  return amount;
+};

@@ -4,7 +4,7 @@ import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/dist/src/signe
 import type { CSAmm } from "../src/types/CSAmm";
 import type { Token } from "../src/types/Token";
 import { BigNumber, ethers } from "ethers";
-import { approvePairToAmm, consoleBN, liquidityRemovalCalculation, mulDiv } from "./utils";
+import { approvePairToAmm, consoleBN, liquidityRemovalCalculation, mulDiv, normalizeAmount } from "./utils";
 
 const shouldBehaveLikeConstantSumAMM = (csAmm: CSAmm) => ({
   toAddLiquidity: async (
@@ -15,27 +15,39 @@ const shouldBehaveLikeConstantSumAMM = (csAmm: CSAmm) => ({
     amount1: BigNumber,
   ): Promise<void> => {
     console.log("------- LIQUIDITY PROVISION TEST STARTS----");
+    const decimal0 = await token0.decimals();
+    const decimal1 = await token1.decimals();
+    console.log("decimal0", decimal0);
+    console.log("decimal1", decimal1);
     const balance0 = await token0.balanceOf(csAmm.address);
     const balance1 = await token1.balanceOf(csAmm.address);
     const userLPBalanceBefore = await csAmm.balanceOf(account.address);
     consoleBN("before pool balance0", balance0);
     consoleBN("before pool balance1", balance1);
+    consoleBN("before pool reserve0", await csAmm.reserve0());
+    consoleBN("before pool reserve1", await csAmm.reserve1());
     consoleBN(`before ${account.address}'s lp balance: `, userLPBalanceBefore);
     consoleBN(`before liquidity invariant `, await csAmm.liquidityInvariant());
     await approvePairToAmm(account, csAmm.address, token0, token1, amount0, amount1);
     await csAmm.connect(account).addLiquidity(amount0, amount1);
     expect(await token0.balanceOf(csAmm.address), "wrong token0 balance").to.equal(balance0.add(amount0));
     expect(await token1.balanceOf(csAmm.address), "wrong token1 balance").to.equal(balance1.add(amount1));
-    expect(await token0.balanceOf(csAmm.address), "wrong reserve0").to.equal(await csAmm.reserve0());
-    expect(await token1.balanceOf(csAmm.address), "wrong reserve1").to.equal(await csAmm.reserve1());
+    expect(normalizeAmount(await token0.balanceOf(csAmm.address), decimal0), "wrong reserve0").to.equal(
+      await csAmm.reserve0(),
+    );
+    expect(normalizeAmount(await token1.balanceOf(csAmm.address), decimal1), "wrong reserve1").to.equal(
+      await csAmm.reserve1(),
+    );
     expect(await csAmm.liquidityInvariant(), "wrong liquidity invariant").to.equal(
       (await csAmm.reserve0()).add(await csAmm.reserve1()),
     );
     expect(await csAmm.balanceOf(account.address), "wrong user's lp balance").to.equal(
-      userLPBalanceBefore.add(amount0.add(amount1)),
+      userLPBalanceBefore.add(normalizeAmount(amount0, decimal0).add(normalizeAmount(amount1, decimal1))),
     );
     consoleBN("after pool balance0", await token0.balanceOf(csAmm.address));
     consoleBN("after pool balance1", await token1.balanceOf(csAmm.address));
+    consoleBN("after pool reserve0", await csAmm.reserve0());
+    consoleBN("after pool reserve1", await csAmm.reserve1());
     consoleBN(`after total LP supply`, await csAmm.totalSupply());
     consoleBN(`after liquidity invariant`, await csAmm.liquidityInvariant());
     consoleBN(`after user's ${account.address}'s lp balance: `, await csAmm.balanceOf(account.address));
@@ -48,6 +60,10 @@ const shouldBehaveLikeConstantSumAMM = (csAmm: CSAmm) => ({
     lpAmount: BigNumber,
   ): Promise<void> => {
     console.log("-------START LIQUIDITY REMOVAL TEST START----");
+    const decimal0 = await token0.decimals();
+    const decimal1 = await token1.decimals();
+    console.log("decimal0", decimal0);
+    console.log("decimal1", decimal1);
     const balance0 = await token0.balanceOf(csAmm.address);
     const balance1 = await token1.balanceOf(csAmm.address);
     const reserve0Before = await csAmm.reserve0();
@@ -78,8 +94,12 @@ const shouldBehaveLikeConstantSumAMM = (csAmm: CSAmm) => ({
 
     expect(await token0.balanceOf(csAmm.address), "wrong pool's token0 balance").to.equal(balance0.sub(redeem0));
     expect(await token1.balanceOf(csAmm.address), "wrong pool's token1 balance").to.equal(balance1.sub(redeem1));
-    expect(await token0.balanceOf(csAmm.address), "remove liq: wrong reserve0").to.equal(await csAmm.reserve0());
-    expect(await token1.balanceOf(csAmm.address), "wrong reserve1").to.equal(await csAmm.reserve1());
+    expect(normalizeAmount(await token0.balanceOf(csAmm.address), decimal0), "wrong reserve0").to.equal(
+      await csAmm.reserve0(),
+    );
+    expect(normalizeAmount(await token1.balanceOf(csAmm.address), decimal1), "wrong reserve1").to.equal(
+      await csAmm.reserve1(),
+    );
     expect(await csAmm.liquidityInvariant(), "wrong liquidity invariant").to.equal(
       (await csAmm.reserve0()).add(await csAmm.reserve1()),
     );
@@ -94,6 +114,8 @@ const shouldBehaveLikeConstantSumAMM = (csAmm: CSAmm) => ({
     );
 
     console.log("------START POOL STATE AFTER START---------");
+    consoleBN("after pool reserve0", await csAmm.reserve0());
+    consoleBN("after pool reserve1", await csAmm.reserve1());
     consoleBN("after pool balance0", await token0.balanceOf(csAmm.address));
     consoleBN("after pool balance1", await token1.balanceOf(csAmm.address));
     consoleBN(`after liquidity invariant`, await csAmm.liquidityInvariant());
@@ -114,6 +136,11 @@ const shouldBehaveLikeConstantSumAMM = (csAmm: CSAmm) => ({
     fee: BigNumber,
   ): Promise<void> => {
     console.log("------- SWAP TEST STARTS----");
+    const decimal0 = await token0.decimals();
+    const decimal1 = await token1.decimals();
+    console.log("decimal0", decimal0);
+    console.log("decimal1", decimal1);
+    const normalizedSwapAmount = normalizeAmount(toSwapAmount, await toSwapToken.decimals());
     const balance0 = await token0.balanceOf(csAmm.address);
     const balance1 = await token1.balanceOf(csAmm.address);
     const totalLPSupply = await csAmm.totalSupply();
@@ -125,7 +152,7 @@ const shouldBehaveLikeConstantSumAMM = (csAmm: CSAmm) => ({
     const prevAccumulatedFee1 = await csAmm.accumulatedFee1();
     const expectedFee = fee.eq(ethers.BigNumber.from(0))
       ? ethers.BigNumber.from(0)
-      : mulDiv(toSwapAmount, fee, ethers.BigNumber.from(10000));
+      : mulDiv(normalizedSwapAmount, fee, ethers.BigNumber.from(10000));
 
     console.log(`is token0 the toSwapToken: ${toSwapToken.address === token0.address}`);
     console.log("--- fee data ---");
@@ -136,6 +163,8 @@ const shouldBehaveLikeConstantSumAMM = (csAmm: CSAmm) => ({
     console.log("--- fee data ---");
     consoleBN("before pool balance0", balance0);
     consoleBN("before pool balance1", balance1);
+    consoleBN("before pool reserve0", await csAmm.reserve0());
+    consoleBN("before pool reserve1", await csAmm.reserve1());
     consoleBN(`before account ${account.address}'s lp balance: `, userLPBalanceBefore);
     consoleBN(`before account ${account.address}'s token0 balance: `, token0UserBalance);
     consoleBN(`before account ${account.address}'s token1 balance: `, token1UserBalance);
@@ -144,9 +173,11 @@ const shouldBehaveLikeConstantSumAMM = (csAmm: CSAmm) => ({
     await toSwapToken.connect(account).approve(csAmm.address, toSwapAmount);
     await csAmm.connect(account).swap(toSwapToken.address, toSwapAmount);
     if (toSwapToken.address === token0.address) {
-      expect(await token0.balanceOf(csAmm.address), "wrong pool's token0 balance").to.equal(balance0.add(toSwapAmount));
+      expect(await token0.balanceOf(csAmm.address), "wrong pool's token0 balance").to.equal(
+        balance0.add(normalizedSwapAmount),
+      );
       expect(await token1.balanceOf(csAmm.address), "wrong pool's token1 balance").to.equal(
-        balance1.sub(toSwapAmount).add(expectedFee),
+        balance1.sub(normalizedSwapAmount).add(expectedFee),
       );
       expect(await token0.balanceOf(account.address), "wrong user's token0 balance").to.equal(
         token0UserBalance.sub(toSwapAmount),
@@ -172,11 +203,16 @@ const shouldBehaveLikeConstantSumAMM = (csAmm: CSAmm) => ({
       expect(await csAmm.accumulatedFee0(), "wrong accumulatedFee0").to.equal(prevAccumulatedFee0.add(expectedFee));
       expect(await csAmm.accumulatedFee1(), "wrong accumulatedFee1").to.equal(prevAccumulatedFee1);
     }
-    expect(await token0.balanceOf(csAmm.address), "wrong reserve0").to.equal(await csAmm.reserve0());
-    expect(await token1.balanceOf(csAmm.address), "wrong reserve1").to.equal(await csAmm.reserve1());
+    expect(normalizeAmount(await token0.balanceOf(csAmm.address), decimal0), "wrong reserve0").to.equal(
+      await csAmm.reserve0(),
+    );
+    expect(normalizeAmount(await token1.balanceOf(csAmm.address), decimal1), "wrong reserve1").to.equal(
+      await csAmm.reserve1(),
+    );
     expect(await csAmm.liquidityInvariant(), "wrong liquidity invariant").to.equal(
       (await csAmm.reserve0()).add(await csAmm.reserve1()),
     );
+
     expect(await csAmm.liquidityInvariant(), "fee incorrectly applied to liquidity invariant calculation").to.equal(
       prevLiquidityInvariant.add(expectedFee),
     );

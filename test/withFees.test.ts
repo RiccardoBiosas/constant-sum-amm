@@ -16,9 +16,8 @@ describe("Constant Sum AMM tests with fees", function () {
   before(async function () {
     signers = await ethers.getSigners();
     const CSAmm = await ethers.getContractFactory("CSAmm", signers[0]);
-    csAmm = <CSAmm>await CSAmm.deploy(fee, signers[0].address);
+    csAmm = <CSAmm>await CSAmm.deploy(fee, signers[0].address, 18, 18);
     await csAmm.deployed();
-    console.log("fee: ", fee.toString());
 
     token0 = <Token>await ethers.getContractAt("Token", await csAmm.token0());
     token1 = <Token>await ethers.getContractAt("Token", await csAmm.token1());

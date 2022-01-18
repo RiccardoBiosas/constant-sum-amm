@@ -5,7 +5,6 @@ pragma solidity 0.8.10;
 import "openzeppelin-solidity/contracts/token/ERC20/IERC20.sol";
 import "openzeppelin-solidity/contracts/token/ERC20/utils/SafeERC20.sol";
 import "abdk-libraries-solidity/ABDKMathQuad.sol";
-import "hardhat/console.sol";
 // interfaces
 import "./interfaces/ICSAmm.sol";
 // mocks
@@ -28,9 +27,14 @@ contract CSAmm is ICSAmm, ERC20 {
     Token public immutable token0;
     Token public immutable token1;
 
-    constructor(uint256 _fee, address _to) ERC20("AMM_LP", "LP") {
-        token0 = new Token("TOKEN0", "TK0", _to);
-        token1 = new Token("TOKEN1", "TK1", _to);
+    constructor(
+        uint256 _fee,
+        address _to,
+        uint8 _decimal0,
+        uint8 _decimal1
+    ) ERC20("AMM_LP", "LP") {
+        token0 = new Token("TOKEN0", "TK0", _to, _decimal0);
+        token1 = new Token("TOKEN1", "TK1", _to, _decimal1);
         fee = _fee;
     }
 
@@ -42,8 +46,8 @@ contract CSAmm is ICSAmm, ERC20 {
         IERC20(token0).transferFrom(msg.sender, address(this), _amount0);
         IERC20(token1).transferFrom(msg.sender, address(this), _amount1);
         // updates the reserves
-        reserve0 = IERC20(token0).balanceOf(address(this));
-        reserve1 = IERC20(token1).balanceOf(address(this));
+        reserve0 = _normalizeAmount(token0, IERC20(token0).balanceOf(address(this)));
+        reserve1 = _normalizeAmount(token1, IERC20(token1).balanceOf(address(this)));
 
         // reserve0 + reserve1 is the updated `liquidityInvariant`
         // providedLiquidity = updatedLiquidityInvariant - previousLiquidityInvariant
@@ -52,7 +56,6 @@ contract CSAmm is ICSAmm, ERC20 {
         liquidityInvariant = reserve0 + reserve1;
     }
 
-    // TODO: you will need to check for underflows later!
     // TODO: add reentrancy guard
     /// @param _amount uint256 _amount of LP to burn
     function removeLiquidity(uint256 _amount) external {
@@ -84,8 +87,8 @@ contract CSAmm is ICSAmm, ERC20 {
             msg.sender,
             isReserve1Gt ? isReserve0Gt ? _amount / 2 : absDiff0 + (_amount / 2) : (_amount / 2) - absDiff1
         );
-        reserve0 = IERC20(token0).balanceOf(address(this));
-        reserve1 = IERC20(token1).balanceOf(address(this));
+        reserve0 = _normalizeAmount(token0, IERC20(token0).balanceOf(address(this)));
+        reserve1 = _normalizeAmount(token1, IERC20(token1).balanceOf(address(this)));
         liquidityInvariant = reserve0 + reserve1;
     }
 
@@ -97,28 +100,28 @@ contract CSAmm is ICSAmm, ERC20 {
     /// @param _amount of _token to be sold to the pool
     function swap(address _token, uint256 _amount) external {
         require(_token == address(token0) || _token == address(token1), "unsupported token");
-
+        uint256 _scaledAmount = _normalizeAmount(Token(_token), _amount);
         uint256 _reserve0;
         uint256 _reserve1;
         IERC20(_token).transferFrom(msg.sender, address(this), _amount);
 
         if (_token == address(token0)) {
             uint256 _swappedToken1;
-            (_reserve0, _reserve1, _swappedToken1) = _swapMath(liquidityInvariant, _amount, reserve0, reserve1);
+            (_reserve0, _reserve1, _swappedToken1) = _swapMath(liquidityInvariant, _scaledAmount, reserve0, reserve1);
             // users sends uint256 _amount of token0 and receives uint256 _swappedToken1 of token1
             uint256 _fee = fee > 0 ? _mulDiv(_swappedToken1, fee, 10000) : 0;
             accumulatedFee1 += _fee;
             IERC20(token1).safeTransfer(msg.sender, _swappedToken1 - _fee);
         } else {
             uint256 _swappedToken0;
-            (_reserve1, _reserve0, _swappedToken0) = _swapMath(liquidityInvariant, _amount, reserve1, reserve0);
+            (_reserve1, _reserve0, _swappedToken0) = _swapMath(liquidityInvariant, _scaledAmount, reserve1, reserve0);
             // users sends uint256 _amount of token1 and receives uint256 _swappedToken0 of token0
             uint256 _fee = fee > 0 ? _mulDiv(_swappedToken0, fee, 10000) : 0;
             accumulatedFee0 += _fee;
             IERC20(token0).safeTransfer(msg.sender, _swappedToken0 - _fee);
         }
-        reserve0 = token0.balanceOf(address(this));
-        reserve1 = token1.balanceOf(address(this));
+        reserve0 = _normalizeAmount(token0, token0.balanceOf(address(this)));
+        reserve1 = _normalizeAmount(token1, token1.balanceOf(address(this)));
         // we update the liquidityInvariant as well to ensure it doesn't diverge too much from the x + k ratio due to the fee
         // it is assumed to be safe to update it because we already asserted that the swap operation complied with the x + k = liquidityInvariant in the _swapMath function
         liquidityInvariant = reserve0 + reserve1;
@@ -138,6 +141,16 @@ contract CSAmm is ICSAmm, ERC20 {
             );
     }
 
+    /// @dev scales a value to the the power of the difference between 18 and the underlying
+    function _normalizeAmount(Token _token, uint256 _amount) private view returns (uint256) {
+        uint256 _tokenDecimals = _token.decimals();
+        if (_tokenDecimals < 18) {
+            return _amount * (1**(18 - _tokenDecimals));
+        }
+        return _amount;
+    }
+
+    /// @dev returns bool whether x > y and their absolute difference
     function _typedAbsSub(uint256 _x, uint256 _y) private pure returns (bool, uint256) {
         return (_x > _y, _x > _y ? _x - _y : _y - _x);
     }
@@ -152,7 +165,7 @@ contract CSAmm is ICSAmm, ERC20 {
         uint256 _reserveY
     )
         private
-        pure
+        view
         returns (
             uint256,
             uint256,
