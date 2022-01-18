@@ -22,6 +22,8 @@ contract CSAmm is ICSAmm, ERC20 {
     uint256 public liquidityInvariant;
 
     uint256 public immutable fee;
+    uint256 public accumulatedFee0;
+    uint256 public accumulatedFee1;
 
     Token public immutable token0;
     Token public immutable token1;
@@ -104,15 +106,22 @@ contract CSAmm is ICSAmm, ERC20 {
             uint256 _swappedToken1;
             (_reserve0, _reserve1, _swappedToken1) = _swapMath(liquidityInvariant, _amount, reserve0, reserve1);
             // users sends uint256 _amount of token0 and receives uint256 _swappedToken1 of token1
-            IERC20(token1).safeTransfer(msg.sender, _swappedToken1);
+            uint256 _fee = fee > 0 ? _mulDiv(_swappedToken1, fee, 10000) : 0;
+            accumulatedFee1 += _fee;
+            IERC20(token1).safeTransfer(msg.sender, _swappedToken1 - _fee);
         } else {
             uint256 _swappedToken0;
             (_reserve1, _reserve0, _swappedToken0) = _swapMath(liquidityInvariant, _amount, reserve1, reserve0);
             // users sends uint256 _amount of token1 and receives uint256 _swappedToken0 of token0
-            IERC20(token0).safeTransfer(msg.sender, _swappedToken0);
+            uint256 _fee = fee > 0 ? _mulDiv(_swappedToken0, fee, 10000) : 0;
+            accumulatedFee0 += _fee;
+            IERC20(token0).safeTransfer(msg.sender, _swappedToken0 - _fee);
         }
         reserve0 = token0.balanceOf(address(this));
         reserve1 = token1.balanceOf(address(this));
+        // we update the liquidityInvariant as well to ensure it doesn't diverge too much from the x + k ratio due to the fee
+        // it is assumed to be safe to update it because we already asserted that the swap operation complied with the x + k = liquidityInvariant in the _swapMath function
+        liquidityInvariant = reserve0 + reserve1;
     }
 
     function _mulDiv(

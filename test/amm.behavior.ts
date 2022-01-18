@@ -1,79 +1,10 @@
-import { ethers } from "hardhat";
 import { expect } from "chai";
 import type { SignerWithAddress } from "@nomiclabs/hardhat-ethers/dist/src/signer-with-address";
 
 import type { CSAmm } from "../src/types/CSAmm";
 import type { Token } from "../src/types/Token";
-import { BigNumber } from "ethers";
-
-const nullAddress = "0x0000000000000000000000000000000000000000";
-
-export const toBN = (value: string): BigNumber => {
-  return ethers.utils.parseEther(value);
-};
-
-const mulDiv = (x: BigNumber, y: BigNumber, z: BigNumber) => {
-  return x.mul(y).div(z);
-};
-
-const computeAbsDiff = (x: BigNumber, y: BigNumber) => {
-  if (x.gt(y)) {
-    return x.sub(y);
-  }
-  return y.sub(x);
-};
-//
-//
-const liquidityRemovalCalculation = (
-  lpAmt: BigNumber,
-  reserve0: BigNumber,
-  reserve1: BigNumber,
-): {
-  redeem0: BigNumber;
-  redeem1: BigNumber;
-} => {
-  const lpAmtPerReserve = lpAmt.div(2);
-  switch (true) {
-    case reserve0.gte(lpAmtPerReserve) && reserve1.gte(lpAmtPerReserve):
-      consoleBN("case reserve0.gte(lpAmtPerReserve) && reserve1.gte(lpAmtPerReserve)", reserve0.sub(lpAmtPerReserve));
-      consoleBN("case reserve0.gte(lpAmtPerReserve) && reserve1.gte(lpAmtPerReserve)", reserve1.sub(lpAmtPerReserve));
-      return {
-        redeem0: lpAmtPerReserve,
-        redeem1: lpAmtPerReserve,
-      };
-    case reserve0.lt(lpAmtPerReserve) && reserve1.gt(lpAmtPerReserve):
-      return {
-        redeem0: lpAmtPerReserve.sub(computeAbsDiff(lpAmtPerReserve, reserve0)),
-        redeem1: lpAmtPerReserve.add(computeAbsDiff(lpAmtPerReserve, reserve0)),
-      };
-    case reserve1.lt(lpAmtPerReserve) && reserve0.gt(lpAmtPerReserve):
-      return {
-        redeem0: lpAmtPerReserve.sub(computeAbsDiff(lpAmtPerReserve, reserve0)),
-        redeem1: lpAmtPerReserve.add(computeAbsDiff(lpAmtPerReserve, reserve0)),
-      };
-    default:
-      console.log("-------- liquidity removal calculation error ----");
-      consoleBN("lpAmount", lpAmt);
-      consoleBN("reserve0", reserve0);
-      consoleBN("reserve1", reserve0);
-      console.log("-------- liquidity removal calculation rror ----");
-      throw new Error("unexpected");
-  }
-};
-
-const approvePairToAmm = async (
-  account: SignerWithAddress,
-  to: string,
-  token0: Token,
-  token1: Token,
-  amount0: BigNumber,
-  amount1: BigNumber,
-): Promise<void> => {
-  await token0.connect(account).approve(to, amount0);
-  await token1.connect(account).approve(to, amount1);
-};
-
-const consoleBN = (str: string, bn: BigNumber) => console.log(`${str}: ${bn.toString()}`);
+import { BigNumber, ethers } from "ethers";
+import { approvePairToAmm, consoleBN, liquidityRemovalCalculation, mulDiv } from "./utils";
 
 const shouldBehaveLikeConstantSumAMM = (csAmm: CSAmm) => ({
   toAddLiquidity: async (
@@ -180,6 +111,7 @@ const shouldBehaveLikeConstantSumAMM = (csAmm: CSAmm) => ({
     token1: Token,
     toSwapToken: Token,
     toSwapAmount: BigNumber,
+    fee: BigNumber,
   ): Promise<void> => {
     console.log("------- SWAP TEST STARTS----");
     const balance0 = await token0.balanceOf(csAmm.address);
@@ -188,40 +120,65 @@ const shouldBehaveLikeConstantSumAMM = (csAmm: CSAmm) => ({
     const userLPBalanceBefore = await csAmm.balanceOf(account.address);
     const token0UserBalance = await token0.balanceOf(account.address);
     const token1UserBalance = await token1.balanceOf(account.address);
+    const prevLiquidityInvariant = await csAmm.liquidityInvariant();
+    const prevAccumulatedFee0 = await csAmm.accumulatedFee0();
+    const prevAccumulatedFee1 = await csAmm.accumulatedFee1();
+    const expectedFee = fee.eq(ethers.BigNumber.from(0))
+      ? ethers.BigNumber.from(0)
+      : mulDiv(toSwapAmount, fee, ethers.BigNumber.from(10000));
+
     console.log(`is token0 the toSwapToken: ${toSwapToken.address === token0.address}`);
+    console.log("--- fee data ---");
+    consoleBN("expected fee", expectedFee);
     consoleBN("amount to swap", toSwapAmount);
+    consoleBN("previous accumulatedFee0", prevAccumulatedFee0);
+    consoleBN("previous accumulatedFee1", prevAccumulatedFee1);
+    console.log("--- fee data ---");
     consoleBN("before pool balance0", balance0);
     consoleBN("before pool balance1", balance1);
     consoleBN(`before account ${account.address}'s lp balance: `, userLPBalanceBefore);
     consoleBN(`before account ${account.address}'s token0 balance: `, token0UserBalance);
     consoleBN(`before account ${account.address}'s token1 balance: `, token1UserBalance);
     consoleBN(`before total LP supply`, totalLPSupply);
-    consoleBN(`before liquidity invariant`, await csAmm.liquidityInvariant());
+    consoleBN(`before liquidity invariant`, prevLiquidityInvariant);
     await toSwapToken.connect(account).approve(csAmm.address, toSwapAmount);
     await csAmm.connect(account).swap(toSwapToken.address, toSwapAmount);
     if (toSwapToken.address === token0.address) {
       expect(await token0.balanceOf(csAmm.address), "wrong pool's token0 balance").to.equal(balance0.add(toSwapAmount));
-      expect(await token1.balanceOf(csAmm.address), "wrong pool's token1 balance").to.equal(balance1.sub(toSwapAmount));
+      expect(await token1.balanceOf(csAmm.address), "wrong pool's token1 balance").to.equal(
+        balance1.sub(toSwapAmount).add(expectedFee),
+      );
       expect(await token0.balanceOf(account.address), "wrong user's token0 balance").to.equal(
         token0UserBalance.sub(toSwapAmount),
       );
       expect(await token1.balanceOf(account.address), "wrong user's token1 balance").to.equal(
-        token1UserBalance.add(toSwapAmount),
+        token1UserBalance.add(toSwapAmount).sub(expectedFee),
       );
+
+      expect(await csAmm.accumulatedFee0(), "wrong accumulatedFee0").to.equal(prevAccumulatedFee0);
+      expect(await csAmm.accumulatedFee1(), "wrong accumulatedFee1").to.equal(prevAccumulatedFee1.add(expectedFee));
     } else {
-      expect(await token0.balanceOf(csAmm.address), "wrong pool's token0 balance").to.equal(balance0.sub(toSwapAmount));
+      expect(await token0.balanceOf(csAmm.address), "wrong pool's token0 balance").to.equal(
+        balance0.sub(toSwapAmount).add(expectedFee),
+      );
       expect(await token1.balanceOf(csAmm.address), "wrong pool's token1 balance").to.equal(balance1.add(toSwapAmount));
       expect(await token0.balanceOf(account.address), "wrong user's token0 balance").to.equal(
-        token0UserBalance.add(toSwapAmount),
+        token0UserBalance.add(toSwapAmount).sub(expectedFee),
       );
       expect(await token1.balanceOf(account.address), "wrong user's token1 balance").to.equal(
         token1UserBalance.sub(toSwapAmount),
       );
+
+      expect(await csAmm.accumulatedFee0(), "wrong accumulatedFee0").to.equal(prevAccumulatedFee0.add(expectedFee));
+      expect(await csAmm.accumulatedFee1(), "wrong accumulatedFee1").to.equal(prevAccumulatedFee1);
     }
     expect(await token0.balanceOf(csAmm.address), "wrong reserve0").to.equal(await csAmm.reserve0());
     expect(await token1.balanceOf(csAmm.address), "wrong reserve1").to.equal(await csAmm.reserve1());
     expect(await csAmm.liquidityInvariant(), "wrong liquidity invariant").to.equal(
       (await csAmm.reserve0()).add(await csAmm.reserve1()),
+    );
+    expect(await csAmm.liquidityInvariant(), "fee incorrectly applied to liquidity invariant calculation").to.equal(
+      prevLiquidityInvariant.add(expectedFee),
     );
     expect(await csAmm.balanceOf(account.address), "wrong user's lp balance").to.equal(userLPBalanceBefore);
     consoleBN("after pool balance0", await token0.balanceOf(csAmm.address));
@@ -235,106 +192,4 @@ const shouldBehaveLikeConstantSumAMM = (csAmm: CSAmm) => ({
   },
 });
 
-describe("Constant Sum AMM tests", function () {
-  let csAmm: CSAmm;
-  let token0: Token;
-  let token1: Token;
-  let signers: SignerWithAddress[];
-  const fee = 0;
-  before(async function () {
-    signers = await ethers.getSigners();
-    const CSAmm = await ethers.getContractFactory("CSAmm", signers[0]);
-    csAmm = <CSAmm>await CSAmm.deploy(fee, signers[0].address);
-    await csAmm.deployed();
-
-    token0 = <Token>await ethers.getContractAt("Token", await csAmm.token0());
-    token1 = <Token>await ethers.getContractAt("Token", await csAmm.token1());
-
-    // funds other users for testing
-    await token0.connect(signers[0]).transfer(signers[1].address, toBN("10"));
-    await token0.connect(signers[0]).transfer(signers[2].address, toBN("30"));
-    await token0.connect(signers[0]).transfer(signers[3].address, toBN("700"));
-    await token1.connect(signers[0]).transfer(signers[1].address, toBN("10"));
-    await token1.connect(signers[0]).transfer(signers[2].address, toBN("30"));
-    await token1.connect(signers[0]).transfer(signers[3].address, toBN("700"));
-  });
-
-  it("checks the initial state", async () => {
-    expect(await csAmm.reserve0(), "wrong initial reserve0 value").to.be.eq(0);
-    expect(await csAmm.reserve1(), "wrong initial reserve1 value").to.be.eq(0);
-    expect(await csAmm.totalSupply(), "wrong lp total supply").to.be.eq(0);
-    expect(await csAmm.fee(), "wrong amm fee value").to.be.eq(fee);
-    expect(await token0.address, "wrong token0").to.not.be.eq(nullAddress);
-    expect(await token1.address, "wrong token1").to.not.be.eq(nullAddress);
-  });
-
-  it("adds matching amounts of (token0, token1) liquidity", async () => {
-    const [admin] = signers;
-    await shouldBehaveLikeConstantSumAMM(csAmm).toAddLiquidity(admin, token0, token1, toBN("2"), toBN("2"));
-  });
-
-  it("removes liquidity", async () => {
-    const [admin] = signers;
-    await shouldBehaveLikeConstantSumAMM(csAmm).toRemoveLiquidity(admin, token0, token1, toBN("3"));
-  });
-
-  it("removes liquidity again", async () => {
-    const [admin] = signers;
-    await shouldBehaveLikeConstantSumAMM(csAmm).toRemoveLiquidity(admin, token0, token1, toBN("1"));
-  });
-
-  it("adds mismatching amounts of liquidity", async () => {
-    const [admin] = signers;
-    await shouldBehaveLikeConstantSumAMM(csAmm).toAddLiquidity(admin, token0, token1, toBN("12"), toBN("8"));
-  });
-
-  it("removes liquidity again", async () => {
-    const [admin] = signers;
-    await shouldBehaveLikeConstantSumAMM(csAmm).toRemoveLiquidity(admin, token0, token1, toBN("2"));
-  });
-
-  it("swaps user's token0 for pool's token1", async () => {
-    const [admin] = signers;
-    await shouldBehaveLikeConstantSumAMM(csAmm).toSwapPoolTokens(admin, token0, token1, token0, toBN("3"));
-  });
-
-  it("userB adds liquidity", async () => {
-    const [admin, userB] = signers;
-    await shouldBehaveLikeConstantSumAMM(csAmm).toAddLiquidity(userB, token0, token1, toBN("3"), toBN("6"));
-  });
-
-  it("swaps user's token1 for pool's token0", async () => {
-    const [admin] = signers;
-    await shouldBehaveLikeConstantSumAMM(csAmm).toSwapPoolTokens(admin, token0, token1, token1, toBN("4"));
-  });
-
-  it("userB swaps token1 for token0", async () => {
-    const [admin, userB] = signers;
-    await shouldBehaveLikeConstantSumAMM(csAmm).toSwapPoolTokens(userB, token0, token1, token1, toBN("2"));
-  });
-
-  it("userB swaps token1 for token0", async () => {
-    const [admin, userB] = signers;
-    await shouldBehaveLikeConstantSumAMM(csAmm).toSwapPoolTokens(userB, token0, token1, token1, toBN("2"));
-  });
-
-  it("userC adds liquidity", async () => {
-    const [admin, userB, userC] = signers;
-    await shouldBehaveLikeConstantSumAMM(csAmm).toAddLiquidity(userC, token0, token1, toBN("12"), toBN("7"));
-  });
-
-  it("userD adds liquidity", async () => {
-    const [admin, userB, userC, userD] = signers;
-    await shouldBehaveLikeConstantSumAMM(csAmm).toAddLiquidity(userD, token0, token1, toBN("378"), toBN("197"));
-  });
-
-  it("userB swaps token0 for token1", async () => {
-    const [admin, userB] = signers;
-    await shouldBehaveLikeConstantSumAMM(csAmm).toSwapPoolTokens(userB, token0, token1, token0, toBN("3"));
-  });
-
-  it("userC removes liquidity", async () => {
-    const [admin, userB, userC] = signers;
-    await shouldBehaveLikeConstantSumAMM(csAmm).toRemoveLiquidity(userC, token0, token1, toBN("4"));
-  });
-});
+export default shouldBehaveLikeConstantSumAMM;
