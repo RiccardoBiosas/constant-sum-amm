@@ -12,7 +12,7 @@ yarn test
 ```
 docker pull trailofbits/eth-security-toolbox
 docker run -it -v "$PWD":/home/training trailofbits/eth-security-toolbox
-solc-select 0.8.0
+solc-select 0.8.10
 cd /home/training
 echidna-test . --contract EchidnaCSAmm --config config.yaml
 ```
